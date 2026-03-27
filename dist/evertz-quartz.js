@@ -1180,11 +1180,11 @@ class EvertzQuartzCard extends HTMLElement {
   }
 }
 
-customElements.define('hass_evertz-quartz', EvertzQuartzCard);
+customElements.define('evertz-quartz-card', EvertzQuartzCard);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: 'hass_evertz-quartz',
+  type: 'evertz-quartz-card',
   name: 'Evertz Quartz Router',
   description: 'Matrix router control card for Evertz Quartz / MAGNUM systems',
   preview: false,
