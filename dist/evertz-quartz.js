@@ -398,6 +398,7 @@ class EvertzQuartzCard extends HTMLElement {
     this._lastTake = null;
     this._favs     = new Set();
     this._storeKey = '';
+    this._lastSig  = '';   // signature of last rendered state
   }
 
   setConfig(config) {
@@ -411,7 +412,17 @@ class EvertzQuartzCard extends HTMLElement {
     this._render();
   }
 
-  set hass(hass) { this._hass = hass; this._render(); }
+  set hass(hass) {
+    this._hass = hass;
+    // Only re-render if something visible actually changed.
+    // HA calls set hass() on every state update across the whole system —
+    // without this guard, scrolling triggers a re-render that jumps back to top.
+    const newSig = this._stateSig();
+    if (newSig !== this._lastSig) {
+      this._lastSig = newSig;
+      this._render();
+    }
+  }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   _saveFavs() {
@@ -458,6 +469,22 @@ class EvertzQuartzCard extends HTMLElement {
     return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   }
 
+  /**
+   * Build a compact signature of the visible state.
+   * If this hasn't changed since the last render, skip the render entirely.
+   * Covers: active sources for all dests, connection state, source list length.
+   */
+  _stateSig() {
+    if (!this._config || !this._hass) return '';
+    const parts = [this._connected()];
+    for (let i = 0; i < this._config.destinations.length; i++) {
+      const st = this._destState(i);
+      parts.push(st ? st.state : '?');
+      parts.push(st ? (st.attributes.options || []).length : 0);
+    }
+    return parts.join('|');
+  }
+
   // ── Route ──────────────────────────────────────────────────────────────────
   _requestTake(destIdx, srcName) {
     this._pending = { destIdx, srcName };
@@ -495,6 +522,10 @@ class EvertzQuartzCard extends HTMLElement {
         <span class="dc-name">${this._destName(i)}</span>
         <span class="dc-src">${this._activeSrc(i)}</span>
       </div>`).join('');
+
+    // Save scroll positions so re-renders don't jump back to top
+    const prevBodyScroll   = this.shadowRoot.querySelector('.sources-body')?.scrollTop ?? 0;
+    const prevMatrixScroll = this.shadowRoot.querySelector('.matrix-body')?.scrollTop ?? 0;
 
     this.shadowRoot.innerHTML = `
       <style>${STYLES}</style>
@@ -550,6 +581,16 @@ class EvertzQuartzCard extends HTMLElement {
       </div>`;
 
     this._bind();
+
+    // Restore scroll positions after DOM replacement
+    if (prevBodyScroll > 0) {
+      const body = this.shadowRoot.querySelector('.sources-body');
+      if (body) body.scrollTop = prevBodyScroll;
+    }
+    if (prevMatrixScroll > 0) {
+      const matrix = this.shadowRoot.querySelector('.matrix-body');
+      if (matrix) matrix.scrollTop = prevMatrixScroll;
+    }
   }
 
   // ── Favourites view ────────────────────────────────────────────────────────
