@@ -127,6 +127,9 @@ const STYLES = `
   .dc-name { font-size: 12px; font-weight: 700; letter-spacing: 1px; color: var(--c-dim); }
   .dest-chip.on .dc-name { color: var(--c-accent); }
   .dc-src { font-size: 11px; color: var(--c-active); font-weight: 600; }
+  .dc-lock { font-size: 13px; }
+  .dest-chip.locked { border-color: var(--c-warn); background: var(--c-warn2); opacity: .85; }
+  .dest-chip.locked .dc-name { color: var(--c-warn); }
 
   /* ── Toolbar ─────────────────────────────────────────────────── */
   .toolbar {
@@ -481,8 +484,29 @@ class EvertzQuartzCard extends HTMLElement {
       const st = this._destState(i);
       parts.push(st ? st.state : '?');
       parts.push(st ? (st.attributes.options || []).length : 0);
+      // Include lock state in signature so locked/unlocked triggers re-render
+      const lockEnt = this._lockEntity(i);
+      const lockSt  = lockEnt ? this._hass.states[lockEnt] : null;
+      parts.push(lockSt ? lockSt.state : 'unknown');
     }
     return parts.join('|');
+  }
+
+  _lockEntity(destIdx) {
+    // Derive lock entity ID from destination entity ID
+    // select.myrouter_dest_a  →  lock.myrouter_dest_a_lock
+    const d = this._config.destinations[destIdx];
+    if (!d) return null;
+    const entityId = d.entity; // e.g. select.myrouter_dest_a
+    if (!entityId.startsWith('select.')) return null;
+    return 'lock.' + entityId.slice(7) + '_lock';
+  }
+
+  _isLocked(destIdx) {
+    const lockEnt = this._lockEntity(destIdx);
+    if (!lockEnt || !this._hass) return false;
+    const st = this._hass.states[lockEnt];
+    return st ? st.state === 'locked' : false;
   }
 
   // ── Route ──────────────────────────────────────────────────────────────────
@@ -516,12 +540,17 @@ class EvertzQuartzCard extends HTMLElement {
       ? `${this._lastTake.destName} → <span class="t-src">${this._lastTake.srcName}</span> @ ${this._fmt(this._lastTake.time)}`
       : 'No takes this session';
 
-    // Destination chips
-    const chips = this._config.destinations.map((d, i) => `
-      <div class="dest-chip ${i === this._selDest ? 'on' : ''}" data-destchip="${i}">
+    // Destination chips — show lock state
+    const chips = this._config.destinations.map((d, i) => {
+      const locked = this._isLocked(i);
+      return `<div class="dest-chip ${i === this._selDest ? 'on' : ''} ${locked ? 'locked' : ''}" data-destchip="${i}">
         <span class="dc-name">${this._destName(i)}</span>
-        <span class="dc-src">${this._activeSrc(i)}</span>
-      </div>`).join('');
+        ${locked
+          ? '<span class="dc-lock" title="Destination is locked">🔒</span>'
+          : `<span class="dc-src">${this._activeSrc(i)}</span>`
+        }
+      </div>`;
+    }).join('');
 
     // Save scroll positions so re-renders don't jump back to top
     const prevBodyScroll   = this.shadowRoot.querySelector('.sources-body')?.scrollTop ?? 0;
@@ -646,7 +675,10 @@ class EvertzQuartzCard extends HTMLElement {
           ${I.group} ${this._grouped ? 'Grouped' : 'Flat'}
         </button>
       </div>
-      <div class="sources-body">
+      <div class="sources-body" style="${this._isLocked(this._selDest) ? 'opacity:.4;pointer-events:none' : ''}">
+        ${this._isLocked(this._selDest) ? `<div class="empty-msg" style="color:var(--c-warn);padding:16px">
+          🔒 ${this._destName(this._selDest)} is locked — unlock via the device card to route
+        </div>` : ''}
         ${favHtml}
         ${!q ? `<div class="group-hdr" style="margin-bottom:10px">
           <span class="group-hdr-label">All Sources (${srcs.length})</span>
@@ -744,9 +776,10 @@ class EvertzQuartzCard extends HTMLElement {
       el.addEventListener('click', () => { this._selDest = +el.dataset.destchip; this._render(); });
     });
 
-    // Source buttons — only on the button itself, not the star span
+    // Source buttons — block routing if destination is locked
     r.querySelectorAll('.src-btn').forEach(el => {
       el.addEventListener('click', () => {
+        if (this._isLocked(this._selDest)) return; // silently blocked — chip shows lock icon
         const name = el.dataset.src;
         if (name && name !== this._activeSrc(this._selDest)) this._requestTake(this._selDest, name);
       });
@@ -765,10 +798,11 @@ class EvertzQuartzCard extends HTMLElement {
       });
     });
 
-    // Matrix cells
+    // Matrix cells — block if destination locked
     r.querySelectorAll('.mcell').forEach(el => {
       el.addEventListener('click', () => {
         const di  = +el.dataset.dest;
+        if (this._isLocked(di)) return;
         const src = el.dataset.src;
         if (this._activeSrc(di) !== src) this._requestTake(di, src);
       });
