@@ -66,6 +66,7 @@ title: My Router              # optional, shown in header
 destinations:                 # required
   - entity: select.myrouter_dest_a
     name: DEST-A              # optional, overrides entity friendly name
+    read_only: true           # optional, force display-only for every user
   - entity: select.myrouter_dest_b
     name: DEST-B
 connection_entity: binary_sensor.myrouter_connected   # optional
@@ -98,6 +99,10 @@ No external dependencies, no build step required.
 - `_bindEvents()` — attaches event listeners after innerHTML
 - `_requestTake(destIdx, srcName)` — shows confirm dialog
 - `_doTake(destIdx, srcName)` — calls `hass.callService('select', 'select_option')`
+- `_canControl(destIdx)` — read-only capability check: config `read_only: true`
+  always display-only; else entity attrs `read_only` / `readonly_allowed_users`
+  vs `hass.user.id` (integration v1.13.1+; attrs absent → controllable).
+  UI-only — the integration enforces read-only server-side regardless.
 - `renderFav()` / `renderMatrix()` — view-specific HTML strings
 
 ### Data flow

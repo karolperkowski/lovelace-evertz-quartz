@@ -13,10 +13,11 @@
  *   destinations:
  *     - entity: select.myrouter_dest_a
  *       name: DEST-A
+ *       read_only: true   # optional — force display-only regardless of user
  *   connection_entity: binary_sensor.myrouter_connected
  */
 
-const CARD_VERSION = '2.0.0';
+const CARD_VERSION = '2.1.0';
 const STORAGE_KEY_PREFIX = 'evertz-quartz-card-v2-';
 
 // ── Colours ────────────────────────────────────────────────────────────────
@@ -130,6 +131,7 @@ const STYLES = `
   .dc-lock { font-size: 13px; }
   .dest-chip.locked { border-color: var(--c-warn); background: var(--c-warn2); opacity: .85; }
   .dest-chip.locked .dc-name { color: var(--c-warn); }
+  .dc-ro { display: flex; align-items: center; color: var(--c-dim); }
 
   /* ── Toolbar ─────────────────────────────────────────────────── */
   .toolbar {
@@ -229,6 +231,17 @@ const STYLES = `
     font-size: 12px; color: var(--c-muted); letter-spacing: 1px;
   }
 
+  /* Read-only destination — static monitor panel (favourites view) */
+  .ro-panel {
+    display: flex; flex-direction: column; align-items: center; gap: 7px;
+    padding: 30px 16px; text-align: center;
+  }
+  .ro-icon { color: var(--c-dim); }
+  .ro-icon svg { width: 22px; height: 22px; }
+  .ro-label { font-size: 10px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: var(--c-muted); }
+  .ro-src { font-size: 20px; font-weight: 700; color: var(--c-active); word-break: break-all; }
+  .ro-hint { font-size: 11px; color: var(--c-dim); letter-spacing: 1px; }
+
   /* ── Matrix view ────────────────────────────────────────────── */
   .matrix-outer { display: flex; flex-direction: column; max-height: 65vh; }
 
@@ -311,6 +324,15 @@ const STYLES = `
   .mcell:hover .cdot { border-color: var(--c-accent); background: var(--c-accent2); }
   .mcell.active .cdot { background: var(--c-active); border-color: var(--c-active); box-shadow: 0 0 8px var(--c-active); }
 
+  /* Read-only destination — greyed column, no hover, active route stays lit */
+  .mdh.ro .mdh-name { color: var(--c-dim); }
+  .mdh-ro { margin-left: 4px; color: var(--c-dim); }
+  .mdh-ro svg { width: 11px; height: 11px; vertical-align: -1px; }
+  .mcell.ro { cursor: default; opacity: .4; }
+  .mcell.ro:hover { background: transparent; }
+  .mcell.ro:hover .cdot { border-color: var(--c-border2); background: transparent; }
+  .mcell.ro.active { opacity: 1; }
+
   /* ── Footer ─────────────────────────────────────────────────── */
   .footer {
     display: flex; align-items: center; justify-content: space-between;
@@ -365,6 +387,7 @@ const I = {
   favs:   `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>`,
   search: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>`,
   group:  `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="17" width="18" height="4" rx="1"/></svg>`,
+  eye:    `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>`,
 };
 
 // ── Grouping helpers ───────────────────────────────────────────────────────
@@ -488,6 +511,8 @@ class EvertzQuartzCard extends HTMLElement {
       const lockEnt = this._lockEntity(i);
       const lockSt  = lockEnt ? this._hass.states[lockEnt] : null;
       parts.push(lockSt ? lockSt.state : 'unknown');
+      // Include read-only capability so attribute/allow-list changes re-render
+      parts.push(this._canControl(i) ? 'rw' : 'ro');
     }
     return parts.join('|');
   }
@@ -507,6 +532,25 @@ class EvertzQuartzCard extends HTMLElement {
     if (!lockEnt || !this._hass) return false;
     const st = this._hass.states[lockEnt];
     return st ? st.state === 'locked' : false;
+  }
+
+  /**
+   * Can the current HA user route to this destination?
+   * UI-only convenience — the integration (v1.13.1+) enforces read-only
+   * server-side regardless of what the card renders.
+   *  - config read_only: true → always display-only, even for allowed users
+   *  - entity attribute read_only missing/false → controllable
+   *    (keeps the card compatible with integrations before v1.13.1)
+   *  - entity attribute read_only true → controllable only when hass.user.id
+   *    is listed in the readonly_allowed_users attribute
+   */
+  _canControl(destIdx) {
+    const d = this._config.destinations[destIdx];
+    if (!d) return false;
+    if (d.read_only === true) return false;
+    const st = this._destState(destIdx);
+    if (!st || !st.attributes.read_only) return true;
+    return (st.attributes.readonly_allowed_users || []).includes(this._hass?.user?.id);
   }
 
   // ── Route ──────────────────────────────────────────────────────────────────
@@ -540,15 +584,17 @@ class EvertzQuartzCard extends HTMLElement {
       ? `${this._lastTake.destName} → <span class="t-src">${this._lastTake.srcName}</span> @ ${this._fmt(this._lastTake.time)}`
       : 'No takes this session';
 
-    // Destination chips — show lock state
+    // Destination chips — show lock and read-only state
     const chips = this._config.destinations.map((d, i) => {
-      const locked = this._isLocked(i);
+      const locked   = this._isLocked(i);
+      const readOnly = !this._canControl(i);
       return `<div class="dest-chip ${i === this._selDest ? 'on' : ''} ${locked ? 'locked' : ''}" data-destchip="${i}">
         <span class="dc-name">${this._destName(i)}</span>
         ${locked
           ? '<span class="dc-lock" title="Destination is locked">🔒</span>'
           : `<span class="dc-src">${this._activeSrc(i)}</span>`
         }
+        ${readOnly && !locked ? `<span class="dc-ro" title="Read-only destination">${I.eye}</span>` : ''}
       </div>`;
     }).join('');
 
@@ -624,6 +670,20 @@ class EvertzQuartzCard extends HTMLElement {
 
   // ── Favourites view ────────────────────────────────────────────────────────
   _renderFav() {
+    // Display-only destination: render the live routed source instead of
+    // tappable source buttons. Take requests are also blocked in _bind().
+    if (!this._canControl(this._selDest)) {
+      return `
+      <div class="sources-body">
+        <div class="ro-panel">
+          <div class="ro-icon">${I.eye}</div>
+          <div class="ro-label">Routed Source</div>
+          <div class="ro-src">${this._activeSrc(this._selDest)}</div>
+          <div class="ro-hint">${this._destName(this._selDest)} is read-only — monitoring only</div>
+        </div>
+      </div>`;
+    }
+
     const srcs      = this._allSources(this._selDest);
     const activeSrc = this._activeSrc(this._selDest);
 
@@ -705,9 +765,11 @@ class EvertzQuartzCard extends HTMLElement {
 
   // ── Matrix view ────────────────────────────────────────────────────────────
   _renderMatrix() {
+    const canCtl = this._config.destinations.map((d, i) => this._canControl(i));
+
     const destHdrs = this._config.destinations.map((d, i) => `
-      <div class="mdh">
-        <span class="mdh-name">${this._destName(i)}</span>
+      <div class="mdh ${canCtl[i] ? '' : 'ro'}">
+        <span class="mdh-name">${this._destName(i)}${canCtl[i] ? '' : `<span class="mdh-ro" title="Read-only destination">${I.eye}</span>`}</span>
         <span class="mdh-src">${this._activeSrc(i)}</span>
       </div>`).join('');
 
@@ -730,7 +792,8 @@ class EvertzQuartzCard extends HTMLElement {
       for (const s of items) {
         const cells = this._config.destinations.map((d, i) => {
           const isActive = this._activeSrc(i) === s.name;
-          return `<div class="mcell ${isActive ? 'active' : ''}" data-dest="${i}" data-src="${s.name}" title="${this._destName(i)} → ${s.name}">
+          const title    = canCtl[i] ? `${this._destName(i)} → ${s.name}` : `${this._destName(i)} is read-only`;
+          return `<div class="mcell ${isActive ? 'active' : ''} ${canCtl[i] ? '' : 'ro'}" data-dest="${i}" data-src="${s.name}" title="${title}">
             <div class="cdot"></div>
           </div>`;
         }).join('');
@@ -776,10 +839,11 @@ class EvertzQuartzCard extends HTMLElement {
       el.addEventListener('click', () => { this._selDest = +el.dataset.destchip; this._render(); });
     });
 
-    // Source buttons — block routing if destination is locked
+    // Source buttons — block routing if destination is locked or read-only
     r.querySelectorAll('.src-btn').forEach(el => {
       el.addEventListener('click', () => {
         if (this._isLocked(this._selDest)) return; // silently blocked — chip shows lock icon
+        if (!this._canControl(this._selDest)) return; // read-only — display-only for this user
         const name = el.dataset.src;
         if (name && name !== this._activeSrc(this._selDest)) this._requestTake(this._selDest, name);
       });
@@ -798,11 +862,11 @@ class EvertzQuartzCard extends HTMLElement {
       });
     });
 
-    // Matrix cells — block if destination locked
+    // Matrix cells — block if destination locked or read-only
     r.querySelectorAll('.mcell').forEach(el => {
       el.addEventListener('click', () => {
         const di  = +el.dataset.dest;
-        if (this._isLocked(di)) return;
+        if (this._isLocked(di) || !this._canControl(di)) return;
         const src = el.dataset.src;
         if (this._activeSrc(di) !== src) this._requestTake(di, src);
       });

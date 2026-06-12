@@ -27,6 +27,7 @@ Home Assistant's default select entity shows all sources in a single dropdown. F
 - **Category filters** that group sources automatically (Cameras, Graphics, Playback, etc.)
 - A **Matrix view** that shows all destinations as columns and all sources as rows — the classic router control panel layout
 - A **confirm dialog** to prevent accidental route changes
+- **Read-only destinations** — destinations you may not route render as live status monitors instead of controls
 
 ---
 
@@ -112,6 +113,7 @@ title: My Router            # shown in the card header (default: "Quartz Router"
 destinations:               # required — at least one destination entity
   - entity: select.myrouter_dest_a
     name: Monitor A         # optional — overrides the entity's friendly name
+    read_only: true         # optional — force display-only for every user
 connection_entity: binary_sensor.myrouter_connected   # optional — shows connected/disconnected badge
 categories:                 # optional — custom source grouping rules (regex strings)
   Cameras: "CAM|CAMS"
@@ -128,8 +130,75 @@ categories:                 # optional — custom source grouping rules (regex s
 | `destinations` | **Yes** | — | List of destination select entities from the integration |
 | `destinations[].entity` | **Yes** | — | Entity ID of the destination select entity |
 | `destinations[].name` | No | Entity friendly name | Display name for this destination |
+| `destinations[].read_only` | No | `false` | Force this destination to be display-only for every user — see [Read-only Destinations](#read-only-destinations) |
 | `connection_entity` | No | — | Binary sensor entity to show connection status badge |
 | `categories` | No | Built-in rules | Custom source grouping rules as regex strings |
+
+---
+
+## Read-only Destinations
+
+Some destinations should be visible but not routable — a transmission output,
+for example. The card renders such destinations as **display-only**:
+
+- **Favourites view** — instead of tappable source buttons you see the
+  currently routed source as a static value with an eye icon and a
+  "read-only" hint. The value still updates live when the route changes
+  externally.
+- **Matrix view** — the destination's column is greyed out and its
+  crosspoints are not clickable, but the active-route highlight stays, so
+  the column keeps working as a status monitor.
+- The destination chip shows a small eye icon next to the live source.
+
+A destination becomes read-only in either of two ways:
+
+### 1. From the integration (v1.13.1+)
+
+[hass_evertz-quartz](https://github.com/karolperkowski/hass_evertz-quartz)
+v1.13.1 and newer can mark destinations as read-only with an optional
+per-user allow list. Each destination select entity then exposes two
+attributes, which the card reads:
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `read_only` | boolean | `true` when the destination is marked read-only |
+| `readonly_allowed_users` | list of HA user-ID strings | Users still allowed to route to it (only populated when `read_only` is true) |
+
+The card compares the logged-in Home Assistant user (`hass.user.id`)
+against `readonly_allowed_users`:
+
+| Entity attributes | Result for the current user |
+|---|---|
+| `read_only` missing or `false` | Full control (also covers integration versions older than v1.13.1) |
+| `read_only: true`, user in `readonly_allowed_users` | Full control |
+| `read_only: true`, user not listed | Display-only |
+
+> **Note:** this is a UI convenience only. The integration enforces
+> read-only **server-side** — takes to a read-only destination are rejected
+> for non-allowed users no matter which client sends them. The card simply
+> avoids offering controls that would be rejected anyway.
+
+### 2. From the card config
+
+You can force a destination to be display-only on a specific dashboard,
+regardless of user or integration version:
+
+```yaml
+type: custom:evertz-quartz-card
+title: My Router
+destinations:
+  - entity: select.myrouter_dest_a
+    name: DEST-A
+    read_only: true     # always display-only on this dashboard
+  - entity: select.myrouter_dest_b
+    name: DEST-B
+```
+
+`read_only: true` in the card config **always wins** — the destination is
+display-only even for users in the integration's allow list. With
+`read_only: false` or the flag absent, the card falls back to the entity
+attributes described above. The config flag works with any integration
+version; attribute-driven read-only requires integration **v1.13.1+**.
 
 ---
 
